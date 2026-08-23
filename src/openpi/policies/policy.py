@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 import logging
+import os
 import pathlib
 import time
 from typing import Any, TypeAlias
@@ -66,6 +67,21 @@ class Policy(BasePolicy):
 
     @override
     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+        debug_context = obs.get("debug_context")
+        old_debug_context = os.environ.get("OPENPI_OAT_HIDDEN_GATE_CONTEXT")
+        if debug_context is not None:
+            os.environ["OPENPI_OAT_HIDDEN_GATE_CONTEXT"] = str(debug_context)
+
+        try:
+            return self._infer_impl(obs, noise=noise)
+        finally:
+            if debug_context is not None:
+                if old_debug_context is None:
+                    os.environ.pop("OPENPI_OAT_HIDDEN_GATE_CONTEXT", None)
+                else:
+                    os.environ["OPENPI_OAT_HIDDEN_GATE_CONTEXT"] = old_debug_context
+
+    def _infer_impl(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)

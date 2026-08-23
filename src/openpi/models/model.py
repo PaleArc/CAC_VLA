@@ -279,6 +279,16 @@ class BaseModel(nnx.Module, abc.ABC):
         train: bool = False,
     ) -> at.Float[at.Array, "*b ah"]: ...
 
+    def compute_loss_and_metrics(
+        self,
+        rng: at.KeyArrayLike,
+        observation: Observation,
+        actions: Actions,
+        *,
+        train: bool = False,
+    ) -> tuple[at.Float[at.Array, "*b ah"], dict[str, at.Array]]:
+        return self.compute_loss(rng, observation, actions, train=train), {}
+
     @abc.abstractmethod
     def sample_actions(self, rng: at.KeyArrayLike, observation: Observation, **kwargs) -> Actions: ...
 

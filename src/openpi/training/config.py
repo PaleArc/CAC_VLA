@@ -90,8 +90,10 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
-    # Only used for RLDS data loader (ie currently only used for DROID).
+    # Only used for RLDS data loaders.
     rlds_data_dir: str | None = None
+    rlds_dataset_type: Literal["droid", "libero", "libero_oat"] | None = None
+    observation_type: Literal["default", "oat"] = "default"
     # Action space for DROID dataset.
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
@@ -418,6 +420,7 @@ class RLDSDroidDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             rlds_data_dir=self.rlds_data_dir,
+            rlds_dataset_type="droid",
             action_space=self.action_space,
             datasets=self.datasets,
         )
@@ -969,6 +972,12 @@ _CONFIGS = [
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),
 ]
+
+# Project configs live outside this upstream-oriented module so the public registry
+# stays small and the data factories can be reused without duplicating experiments.
+from openpi.training.configs.palearc import get_configs as _get_palearc_configs  # noqa: E402
+
+_CONFIGS.extend(_get_palearc_configs())
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")

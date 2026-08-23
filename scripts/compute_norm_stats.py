@@ -5,6 +5,8 @@ will compute the mean and standard deviation of the data in the dataset and save
 to the config assets directory.
 """
 
+import pathlib
+
 import numpy as np
 import tqdm
 import tyro
@@ -41,8 +43,8 @@ def create_torch_dataloader(
             RemoveStrings(),
         ],
     )
-    if max_frames is not None and max_frames < len(dataset):
-        num_batches = max_frames // batch_size
+    if max_frames is not None:
+        num_batches = max(1, max_frames // batch_size)
         shuffle = True
     else:
         num_batches = len(dataset) // batch_size
@@ -63,7 +65,14 @@ def create_rlds_dataloader(
     batch_size: int,
     max_frames: int | None = None,
 ) -> tuple[_data_loader.Dataset, int]:
-    dataset = _data_loader.create_rlds_dataset(data_config, action_horizon, batch_size, shuffle=False)
+    dataset = _data_loader.create_rlds_dataset(
+        data_config,
+        action_horizon,
+        batch_size,
+        shuffle=False,
+        allow_missing_norm_stats=True,
+        repeat=False,
+    )
     dataset = _data_loader.IterableTransformedDataset(
         dataset,
         [
@@ -74,21 +83,25 @@ def create_rlds_dataloader(
         ],
         is_batched=True,
     )
-    if max_frames is not None and max_frames < len(dataset):
-        num_batches = max_frames // batch_size
+    if max_frames is not None:
+        num_batches = max(1, max_frames // batch_size)
+    elif data_config.rlds_dataset_type == "libero":
+        num_batches = None
     else:
         # NOTE: this length is currently hard-coded for DROID.
         num_batches = len(dataset) // batch_size
     data_loader = _data_loader.RLDSDataLoader(
         dataset,
         num_batches=num_batches,
+        restart_on_exhaustion=False,
     )
     return data_loader, num_batches
 
 
 def main(config_name: str, max_frames: int | None = None):
     config = _config.get_config(config_name)
-    data_config = config.data.create(config.assets_dirs, config.model)
+    create_for_norm_stats = getattr(config.data, "create_for_norm_stats", config.data.create)
+    data_config = create_for_norm_stats(config.assets_dirs, config.model)
 
     if data_config.rlds_data_dir is not None:
         data_loader, num_batches = create_rlds_dataloader(
@@ -108,7 +121,11 @@ def main(config_name: str, max_frames: int | None = None):
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
+    if data_config.rlds_data_dir is not None and len(data_config.datasets) == 1:
+        dataset = data_config.datasets[0]
+        output_path = pathlib.Path(data_config.rlds_data_dir) / dataset.name / dataset.version
+    else:
+        output_path = config.assets_dirs / data_config.repo_id
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 

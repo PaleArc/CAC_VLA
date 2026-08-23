@@ -2,6 +2,13 @@
 assets/
 checkpoints/
 data/
+!scripts/data/
+!scripts/data/**
+logs/
+.libero/
+.libero_plus/
+.ruff_cache/
+.mypy_cache/
 wandb/
 
 # Byte-compiled / optimized / DLL files

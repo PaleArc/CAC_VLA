@@ -1,6 +1,7 @@
 import dataclasses
 import functools
 import logging
+import numbers
 import platform
 from typing import Any
 
@@ -26,6 +27,17 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
+
+
+def _format_log_value(value: Any) -> str:
+    if isinstance(value, numbers.Real):
+        return f"{float(value):.4f}"
+    if isinstance(value, np.ndarray) and value.shape == ():
+        scalar = value.item()
+        if isinstance(scalar, numbers.Real):
+            return f"{float(scalar):.4f}"
+        return str(scalar)
+    return str(value)
 
 
 def init_logging():
@@ -147,15 +159,17 @@ def train_step(
     def loss_fn(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
-        chunked_loss = model.compute_loss(rng, observation, actions, train=True)
-        return jnp.mean(chunked_loss)
+        chunked_loss, metrics = model.compute_loss_and_metrics(rng, observation, actions, train=True)
+        return jnp.mean(chunked_loss), metrics
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+    (loss, metrics), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
+        model, train_rng, observation, actions
+    )
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -185,6 +199,7 @@ def train_step(
     )
     info = {
         "loss": loss,
+        **metrics,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
     }
@@ -263,7 +278,7 @@ def main(config: _config.TrainConfig):
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+            info_str = ", ".join(f"{k}={_format_log_value(v)}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []

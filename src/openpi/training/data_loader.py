@@ -12,8 +12,11 @@ import numpy as np
 import torch
 
 import openpi.models.model as _model
+from openpi.models.pi0_oat_config import OATObservation
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
+from openpi.training.libero_oat_rlds_dataset import LiberoOatRldsDataset
+from openpi.training.libero_rlds_dataset import LiberoRldsDataset
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -157,8 +160,32 @@ def create_rlds_dataset(
     batch_size: int,
     *,
     shuffle: bool = False,
+    seed: int = 0,
+    allow_missing_norm_stats: bool = False,
+    repeat: bool = True,
 ) -> Dataset:
-    # At the moment, we only support DROID for RLDS datasets.
+    if data_config.rlds_dataset_type == "libero_oat":
+        return LiberoOatRldsDataset(
+            data_dir=data_config.rlds_data_dir,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            action_chunk_size=action_horizon,
+            datasets=data_config.datasets,
+            seed=seed,
+            allow_missing_norm_stats=allow_missing_norm_stats,
+            repeat=repeat,
+        )
+    if data_config.rlds_dataset_type == "libero":
+        return LiberoRldsDataset(
+            data_dir=data_config.rlds_data_dir,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            action_chunk_size=action_horizon,
+            datasets=data_config.datasets,
+            seed=seed,
+            allow_missing_norm_stats=allow_missing_norm_stats,
+            repeat=repeat,
+        )
     return DroidRldsDataset(
         data_dir=data_config.rlds_data_dir,
         batch_size=batch_size,
@@ -249,6 +276,7 @@ def create_data_loader(
             batch_size=config.batch_size,
             sharding=sharding,
             shuffle=shuffle,
+            seed=config.seed,
             num_batches=num_batches,
             skip_norm_stats=skip_norm_stats,
             framework=framework,
@@ -345,6 +373,7 @@ def create_rlds_data_loader(
     sharding: jax.sharding.Sharding | None = None,
     skip_norm_stats: bool = False,
     shuffle: bool = False,
+    seed: int = 0,
     num_batches: int | None = None,
     framework: str = "jax",
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
@@ -366,7 +395,7 @@ def create_rlds_data_loader(
     """
     if framework == "pytorch":
         raise NotImplementedError("PyTorch RLDS data loader is not supported yet")
-    dataset = create_rlds_dataset(data_config, action_horizon, batch_size, shuffle=shuffle)
+    dataset = create_rlds_dataset(data_config, action_horizon, batch_size, shuffle=shuffle, seed=seed)
     dataset = transform_iterable_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats, is_batched=True)
 
     data_loader = RLDSDataLoader(
@@ -491,13 +520,15 @@ class RLDSDataLoader:
 
     def __init__(
         self,
-        dataset: DroidRldsDataset,
+        dataset: DroidRldsDataset | LiberoRldsDataset | LiberoOatRldsDataset,
         *,
         sharding: jax.sharding.Sharding | None = None,
         num_batches: int | None = None,
+        restart_on_exhaustion: bool = True,
     ):
         self._dataset = dataset
         self._num_batches = num_batches
+        self._restart_on_exhaustion = restart_on_exhaustion
 
         if jax.process_count() > 1:
             raise NotImplementedError("Data loading with multiple processes is not supported.")
@@ -522,6 +553,8 @@ class RLDSDataLoader:
                 try:
                     batch = next(data_iter)
                 except StopIteration:
+                    if not self._restart_on_exhaustion:
+                        return
                     break  # We've exhausted the dataset. Create a new iterator and start over.
                 num_items += 1
                 yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
@@ -537,4 +570,7 @@ class DataLoaderImpl(DataLoader):
 
     def __iter__(self):
         for batch in self._data_loader:
-            yield _model.Observation.from_dict(batch), batch["actions"]
+            if getattr(self._data_config, "observation_type", "default") == "oat":
+                yield OATObservation.from_dict(batch), batch["actions"]
+            else:
+                yield _model.Observation.from_dict(batch), batch["actions"]
