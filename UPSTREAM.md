@@ -9,9 +9,9 @@ updates can be reviewed separately.
 
 ## External repositories
 
-The modified OAT implementation is maintained in a separate fork and will be
-pinned at `external/oat` as a Git submodule before publication. The submodule
-must point to an immutable commit; generated tokenizer checkpoints are not stored here.
+The modified OAT implementation is maintained in the PaleArc OAT fork and is
+pinned at `external/oat` as a Git submodule. The submodule points to an
+immutable commit; generated tokenizer checkpoints are not stored here.
 
 LIBERO-Plus and CALVIN are evaluation dependencies. Their source, datasets, and
 assets are not vendored in this repository. Evaluation entry points accept an
