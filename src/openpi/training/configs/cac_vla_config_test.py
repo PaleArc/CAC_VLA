@@ -5,7 +5,7 @@ import pytest
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_oat_config as pi0_oat_config
 import openpi.training.config as _config
-from openpi.training.configs import palearc
+from openpi.training.configs import cac_vla_config
 
 EXPECTED_CONFIG_NAMES = (
     "pi05_libero_plus_oat_rawalign_only_action_h10",
@@ -22,10 +22,11 @@ EXPECTED_CONFIG_NAMES = (
 
 
 def test_project_config_registry_is_intentionally_small():
-    configs = palearc.get_configs()
+    configs = cac_vla_config.get_configs()
 
     assert tuple(config.name for config in configs) == EXPECTED_CONFIG_NAMES
     assert all(_config.get_config(name).name == name for name in EXPECTED_CONFIG_NAMES)
+    assert all(config.project_name == "cac_vla" for config in configs)
 
 
 @pytest.mark.parametrize(

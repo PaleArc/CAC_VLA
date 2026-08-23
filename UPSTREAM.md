@@ -3,7 +3,7 @@
 This repository is a research fork of
 [Physical-Intelligence/openpi](https://github.com/Physical-Intelligence/openpi).
 
-The `upstream` Git remote tracks the official project. PaleARC-specific model,
+The `upstream` Git remote tracks the official project. CAC-VLA-specific model,
 RLDS, training, and evaluation code is kept in focused modules so upstream
 updates can be reviewed separately.
 

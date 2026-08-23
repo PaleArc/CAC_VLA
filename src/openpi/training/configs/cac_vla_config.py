@@ -80,7 +80,7 @@ def _train_config(
 ) -> _config.TrainConfig:
     return _config.TrainConfig(
         name=name,
-        project_name="palearc",
+        project_name="cac_vla",
         model=model,
         data=data,
         batch_size=128,

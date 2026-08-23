@@ -1,17 +1,17 @@
-# PaleArc OpenPI / CAC-VLA
+# CAC-VLA on OpenPI
 
 This repository is the PaleArc research fork of
 [`Physical-Intelligence/openpi`](https://github.com/Physical-Intelligence/openpi).
 It integrates Ordered Action Tokenization (OAT) with the pi0.5 flow-matching
 policy for controlled experiments on LIBERO, LIBERO-Plus, and CALVIN.
 
-## PaleArc scope
+## CAC-VLA scope
 
 The fork adds:
 
 - OAT latent alignment and optional action-expert cross-attention;
 - RLDS loaders and OAT augmentation pipelines for the supported benchmarks;
-- training and evaluation entry points for the PaleArc experiments;
+- training and evaluation entry points for the CAC-VLA experiments;
 - ten intentionally retained project configurations; and
 - the modified [`PaleArc/oat`](https://github.com/PaleArc/oat) fork pinned at
   `external/oat` as a Git submodule.
@@ -20,7 +20,7 @@ Datasets, checkpoints, logs, videos, and generated tokenizer outputs are not
 stored in Git. The upstream relationship and repository boundary are documented
 in [UPSTREAM.md](UPSTREAM.md).
 
-## PaleArc quick start
+## CAC-VLA quick start
 
 Clone the repository and initialize only the OAT dependency:
 
@@ -34,14 +34,14 @@ This does not download the optional upstream ALOHA or LIBERO submodules. Use
 `git submodule update --init --recursive` only when those repositories and
 OAT's nested evaluation dependency are required.
 
-Install the project with the upstream `uv` workflow described below. PaleArc
-training can then be launched through `scripts/run_palearc_training.py`; see
-[docs/palearc_training.md](docs/palearc_training.md) for path overrides and
+Install the project with the upstream `uv` workflow described below. CAC-VLA
+training can then be launched through `scripts/run_cac_vla_training.py`; see
+[docs/cac_vla_training.md](docs/cac_vla_training.md) for path overrides and
 runtime options.
 
 ## Project configurations
 
-The project registry contains the following ten PaleArc configurations:
+The project registry contains the following ten CAC-VLA configurations:
 
 ```text
 pi05_libero_plus_oat_rawalign_only_action_h10
@@ -104,7 +104,7 @@ The repo has been tested with Ubuntu 22.04, we do not currently support other op
 ## Installation
 
 When using this fork, clone it and initialize the submodules needed for your
-workflow. The PaleArc integration itself requires only `external/oat`:
+workflow. The CAC-VLA integration itself requires only `external/oat`:
 
 ```bash
 git clone https://github.com/PaleArc/openpi_CAC_VLA.git

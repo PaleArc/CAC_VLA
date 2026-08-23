@@ -975,9 +975,9 @@ _CONFIGS = [
 
 # Project configs live outside this upstream-oriented module so the public registry
 # stays small and the data factories can be reused without duplicating experiments.
-from openpi.training.configs.palearc import get_configs as _get_palearc_configs  # noqa: E402
+from openpi.training.configs.cac_vla_config import get_configs as _get_cac_vla_configs  # noqa: E402
 
-_CONFIGS.extend(_get_palearc_configs())
+_CONFIGS.extend(_get_cac_vla_configs())
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")

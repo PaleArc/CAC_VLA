@@ -1,6 +1,6 @@
-# PaleARC training
+# CAC-VLA training
 
-Use `scripts/run_palearc_training.py` to launch one registered configuration and optionally
+Use `scripts/run_cac_vla_training.py` to launch one registered configuration and optionally
 override its learning rate, OAT memory dropout, training length, or checkpoint
 retention. GPU selection and accelerator settings use the standard JAX
 environment variables.

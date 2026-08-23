@@ -16,7 +16,7 @@ class Args:
     num_train_steps: int | None = None
     save_interval: int | None = None
     keep_period: int | None = None
-    project_name: str = "palearc"
+    project_name: str = "cac_vla"
     resume: bool = True
     overwrite: bool = False
 
