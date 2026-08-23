@@ -1,4 +1,74 @@
-# openpi
+# PaleArc OpenPI / CAC-VLA
+
+This repository is the PaleArc research fork of
+[`Physical-Intelligence/openpi`](https://github.com/Physical-Intelligence/openpi).
+It integrates Ordered Action Tokenization (OAT) with the pi0.5 flow-matching
+policy for controlled experiments on LIBERO, LIBERO-Plus, and CALVIN.
+
+## PaleArc scope
+
+The fork adds:
+
+- OAT latent alignment and optional action-expert cross-attention;
+- RLDS loaders and OAT augmentation pipelines for the supported benchmarks;
+- training and evaluation entry points for the PaleArc experiments;
+- ten intentionally retained project configurations; and
+- the modified [`PaleArc/oat`](https://github.com/PaleArc/oat) fork pinned at
+  `external/oat` as a Git submodule.
+
+Datasets, checkpoints, logs, videos, and generated tokenizer outputs are not
+stored in Git. The upstream relationship and repository boundary are documented
+in [UPSTREAM.md](UPSTREAM.md).
+
+## PaleArc quick start
+
+Clone the repository and initialize only the OAT dependency:
+
+```bash
+git clone https://github.com/PaleArc/openpi_CAC_VLA.git
+cd openpi_CAC_VLA
+git submodule update --init external/oat
+```
+
+This does not download the optional upstream ALOHA or LIBERO submodules. Use
+`git submodule update --init --recursive` only when those repositories and
+OAT's nested evaluation dependency are required.
+
+Install the project with the upstream `uv` workflow described below. PaleArc
+training can then be launched through `scripts/run_palearc_training.py`; see
+[docs/palearc_training.md](docs/palearc_training.md) for path overrides and
+runtime options.
+
+## Project configurations
+
+The project registry contains the following ten PaleArc configurations:
+
+```text
+pi05_libero_plus_oat_rawalign_only_action_h10
+pi05_libero_plus_oat_rawalign_only_action_h20
+pi05_libero_plus_oat_rawalign_only_action_h30
+pi05_base_libero_plus_rlds
+pi05_libero_rlds
+pi05_libero_oat_rawalign_only_action
+pi05_libero_plus_oat_rawalign_noexpert_h10
+pi05_libero_plus_oat_rawalign_directresidual_h10
+pi05_calvin_oat_rawalign_only_action
+pi05_calvin_rlds
+```
+
+Existing checkpoints trained with these configuration names retain the same
+model parameter trees. Pass the matching configuration and checkpoint step to
+the policy server, and set the corresponding `OPENPI_*_DIR` variable to the
+dataset location used at runtime. For example:
+
+```bash
+OPENPI_LIBERO_PLUS_OAT_H10_DIR=/path/to/libero_plus_rlds_oat_H10 \
+uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_libero_plus_oat_rawalign_only_action_h10 \
+  --policy.dir=/path/to/checkpoints/<experiment>/<step>
+```
+
+## Upstream OpenPI
 
 openpi holds open-source models and packages for robotics, published by the [Physical Intelligence team](https://www.physicalintelligence.company/).
 
@@ -33,14 +103,19 @@ The repo has been tested with Ubuntu 22.04, we do not currently support other op
 
 ## Installation
 
-When cloning this repo, make sure to update submodules:
+When using this fork, clone it and initialize the submodules needed for your
+workflow. The PaleArc integration itself requires only `external/oat`:
 
 ```bash
-git clone --recurse-submodules git@github.com:Physical-Intelligence/openpi.git
+git clone https://github.com/PaleArc/openpi_CAC_VLA.git
+cd openpi_CAC_VLA
+git submodule update --init external/oat
 
-# Or if you already cloned the repo:
+# Optional: fetch every upstream and nested evaluation dependency.
 git submodule update --init --recursive
 ```
+
+The recursive command also downloads the upstream ALOHA and LIBERO submodules.
 
 We use [uv](https://docs.astral.sh/uv/) to manage Python dependencies. See the [uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/) to set it up. Once uv is installed, run the following to set up the environment:
 
