@@ -12,16 +12,19 @@ _PI05_BASE_PARAMS = os.environ.get(
     "OPENPI_PI05_BASE_PARAMS",
     "gs://openpi-assets/checkpoints/pi05_base/params",
 )
-_OAT_CROSS_ATTN_MISSING_REGEX = (
+_OAT_ONLY_ACTION_MISSING_REGEX = (
     ".*(lora.*|latent_query_embeddings.*|oat_to_hidden_proj/.*|query_memory_norm/.*|"
     "query_memory_proj/.*|pre_latent_cross_attention_norm_1/.*|latent_cross_attn_1/.*|"
-    "latent_cross_attn_context_gate_action_proj_1/.*|latent_cross_attn_context_gate_attn_proj_1/.*|"
-    "latent_cross_attn_context_gate_prefix_proj_1/.*|latent_cross_attn_context_gate_score_1/.*|"
+    "latent_cross_attn_context_gate_action_proj_1/.*|latent_cross_attn_context_gate_score_1/.*|"
     "query_oat_norm/.*|query_oat_proj/.*)"
 )
-_OAT_ALIGNMENT_ONLY_MISSING_REGEX = (
+_OAT_DIRECT_RESIDUAL_MISSING_REGEX = (
     ".*(lora.*|latent_query_embeddings.*|oat_to_hidden_proj/.*|query_memory_norm/.*|"
-    "query_memory_proj/.*|query_oat_norm/.*|query_oat_proj/.*)"
+    "query_memory_proj/.*|pre_latent_cross_attention_norm_1/.*|latent_cross_attn_1/.*|"
+    "query_oat_norm/.*|query_oat_proj/.*)"
+)
+_OAT_NOEXPERT_MISSING_REGEX = (
+    ".*(lora.*|latent_query_embeddings.*|oat_to_hidden_proj/.*|query_oat_norm/.*|query_oat_proj/.*)"
 )
 
 
@@ -43,6 +46,7 @@ def _oat_config(
     cross_attention: bool = True,
     direct_residual: bool = False,
 ) -> pi0_oat_config.Pi0OatConfig:
+    mode = "noexpert" if not cross_attention else ("direct_residual" if direct_residual else "only_action")
     return pi0_oat_config.Pi0OatConfig(
         pi05=True,
         action_horizon=10,
@@ -51,17 +55,7 @@ def _oat_config(
         lambda_latent=0.1,
         oat_num_queries=8,
         oat_latent_dim=4,
-        oat_queries_visible_to_action_expert=False,
-        oat_latent_cross_attention_to_expert=cross_attention,
-        oat_expert_memory_source_train="projected_oat" if cross_attention else "query_hidden",
-        oat_expert_memory_source_infer="query_hidden",
-        oat_expert_memory_dropout_rate=0.1,
-        use_oat_cross_attn_residual_gate=not direct_residual,
-        use_oat_cross_attn_hidden_gate=cross_attention and not direct_residual,
-        use_oat_cross_attn_context_gate=cross_attention and not direct_residual,
-        oat_cross_attn_context_gate_inputs=("action",)
-        if cross_attention and not direct_residual
-        else ("action", "attn", "prefix"),
+        oat_mode=mode,
         oat_alignment_target_space="raw",
         oat_expert_memory_input_space="raw",
         oat_query_hidden_noise_std=0.01 if cross_attention else 0.0,
@@ -170,19 +164,19 @@ def get_configs() -> list[_config.TrainConfig]:
             name="pi05_libero_plus_oat_rawalign_only_action_h10",
             model=_oat_config(),
             data=_libero_plus_oat_data(libero_plus_h10),
-            missing_regex=_OAT_CROSS_ATTN_MISSING_REGEX,
+            missing_regex=_OAT_ONLY_ACTION_MISSING_REGEX,
         ),
         _train_config(
             name="pi05_libero_plus_oat_rawalign_only_action_h20",
             model=_oat_config(),
             data=_libero_plus_oat_data(libero_plus_h20),
-            missing_regex=_OAT_CROSS_ATTN_MISSING_REGEX,
+            missing_regex=_OAT_ONLY_ACTION_MISSING_REGEX,
         ),
         _train_config(
             name="pi05_libero_plus_oat_rawalign_only_action_h30",
             model=_oat_config(),
             data=_libero_plus_oat_data(libero_plus_h30),
-            missing_regex=_OAT_CROSS_ATTN_MISSING_REGEX,
+            missing_regex=_OAT_ONLY_ACTION_MISSING_REGEX,
         ),
         _train_config(
             name="pi05_base_libero_plus_rlds",
@@ -199,26 +193,26 @@ def get_configs() -> list[_config.TrainConfig]:
             name="pi05_libero_oat_rawalign_only_action",
             model=_oat_config(),
             data=_libero_oat_data(libero_oat_root),
-            missing_regex=_OAT_CROSS_ATTN_MISSING_REGEX,
+            missing_regex=_OAT_ONLY_ACTION_MISSING_REGEX,
         ),
         _train_config(
             name="pi05_libero_plus_oat_rawalign_noexpert_h10",
             model=_oat_config(cross_attention=False),
             data=_libero_plus_oat_data(libero_plus_h10),
             peak_lr=1e-5,
-            missing_regex=_OAT_ALIGNMENT_ONLY_MISSING_REGEX,
+            missing_regex=_OAT_NOEXPERT_MISSING_REGEX,
         ),
         _train_config(
             name="pi05_libero_plus_oat_rawalign_directresidual_h10",
             model=_oat_config(direct_residual=True),
             data=_libero_plus_oat_data(libero_plus_h10),
-            missing_regex=_OAT_CROSS_ATTN_MISSING_REGEX,
+            missing_regex=_OAT_DIRECT_RESIDUAL_MISSING_REGEX,
         ),
         _train_config(
             name="pi05_calvin_oat_rawalign_only_action",
             model=_oat_config(discrete_state_input=True),
             data=_calvin_oat_data(calvin_oat_root),
-            missing_regex=_OAT_CROSS_ATTN_MISSING_REGEX,
+            missing_regex=_OAT_ONLY_ACTION_MISSING_REGEX,
         ),
         _train_config(
             name="pi05_calvin_rlds",

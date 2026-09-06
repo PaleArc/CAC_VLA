@@ -198,15 +198,7 @@ class CrossAttention(nn.Module):
 @at.typecheck
 class Block(nn.Module):
     configs: tuple[Config, ...]
-    latent_cross_attention_to_expert: bool = False
-    use_cross_attn_residual_gate: bool = True
-    use_cross_attn_hidden_gate: bool = False
-    cross_attn_hidden_gate_bias_init: float = -5.0
-    use_cross_attn_context_gate: bool = False
-    cross_attn_context_gate_bias_init: float = -5.0
-    cross_attn_context_gate_inputs: tuple[str, ...] = ("action", "attn", "prefix")
-    use_cross_attn_kv_soft_gate: bool = False
-    cross_attn_kv_soft_gate_bias_init: float = 0.0
+    oat_mode: str = "only_action"
     cache_dtype: str | None = None
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
@@ -219,19 +211,11 @@ class Block(nn.Module):
         positions,
         attn_mask,
         adarms_cond,
-        latent_query_indices,
         cross_attn_memory,
         cross_attn_memory_mask,
         cross_attn_gate,
         cross_attn_layer_index,
         cross_attn_layer_enabled,
-        prefix_context_mask,
-        cross_attn_prefix_context,
-        query_memory_norm_scale,
-        query_memory_norm_bias,
-        query_memory_norm_epsilon,
-        query_memory_proj_kernel,
-        query_memory_proj_bias,
         deterministic=True,
     ):
         xs = sharding.activation_sharding_constraint(xs)
@@ -254,76 +238,13 @@ class Block(nn.Module):
         xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, post_attn, gates, strict=True)]
         xs = sharding.activation_sharding_constraint(xs)
 
-        prefix_context_state = None
-        if self.latent_cross_attention_to_expert:
-            if xs[0] is not None and prefix_context_mask is not None and prefix_context_mask.shape[1] > 0:
-                prefix_context_state = _masked_mean(xs[0], prefix_context_mask)
-            elif cross_attn_prefix_context is not None and cross_attn_prefix_context.shape[-1] > 0:
-                prefix_context_state = cross_attn_prefix_context
-
-        query_state = None
-        if self.latent_cross_attention_to_expert and xs[0] is not None and latent_query_indices is not None:
-            query_state = jnp.take_along_axis(xs[0], latent_query_indices[..., None], axis=1)
-
-            # 下面的意思是训练的时候使用VLM而不是用oat
-            if query_memory_norm_scale is not None and query_memory_proj_kernel is not None:
-                query_state = _apply_query_memory_adapter(
-                    query_state,
-                    query_memory_norm_scale,
-                    query_memory_norm_bias,
-                    query_memory_norm_epsilon,
-                    query_memory_proj_kernel,
-                    query_memory_proj_bias,
-                )
-
-        if self.latent_cross_attention_to_expert and len(xs) > 1 and xs[1] is not None:
-            cross_attn_layer_scale = jnp.asarray(cross_attn_layer_enabled, dtype=xs[1].dtype)
-            latent_memory = None
-            latent_memory_mask = None
-            if cross_attn_memory is not None and cross_attn_memory.shape[1] > 0:
-                latent_memory = cross_attn_memory
-                if cross_attn_memory_mask is not None and cross_attn_memory_mask.shape[1] > 0:
-                    latent_memory_mask = cross_attn_memory_mask
-            elif query_state is not None:
-                latent_memory = query_state
-                if cross_attn_memory_mask is not None and cross_attn_memory_mask.shape[1] > 0:
-                    latent_memory_mask = cross_attn_memory_mask
-
-            if latent_memory is not None and latent_memory.shape[1] > 0:
+        if self.oat_mode != "noexpert" and len(xs) > 1 and xs[1] is not None:
+            latent_memory = cross_attn_memory if cross_attn_memory is not None and cross_attn_memory.shape[1] > 0 else None
+            if latent_memory is not None:
+                latent_memory_mask = cross_attn_memory_mask if cross_attn_memory_mask is not None else None
                 normed_action_x, latent_gate = RMSNorm(name=_name("pre_latent_cross_attention_norm", 1))(
                     xs[1], adarms_cond[1]
                 )
-                memory_logit_bias = None
-                if self.use_cross_attn_kv_soft_gate:
-                    if prefix_context_state is None:
-                        prefix_context_state = jnp.zeros(
-                            (normed_action_x.shape[0], self.configs[0].width),
-                            dtype=normed_action_x.dtype,
-                        )
-                    action_summary = jnp.mean(normed_action_x, axis=1)
-                    action_gate_state = nn.Dense(
-                        self.configs[0].width,
-                        name=_name("latent_cross_attn_kv_gate_action_proj", 1),
-                    )(action_summary)
-                    memory_gate_state = nn.Dense(
-                        self.configs[0].width,
-                        name=_name("latent_cross_attn_kv_gate_memory_proj", 1),
-                    )(latent_memory)
-                    prefix_gate_state = nn.Dense(
-                        self.configs[0].width,
-                        name=_name("latent_cross_attn_kv_gate_prefix_proj", 1),
-                    )(prefix_context_state)
-                    kv_gate_input = jnp.tanh(
-                        memory_gate_state + action_gate_state[:, None, :] + prefix_gate_state[:, None, :]
-                    )
-                    kv_gate_score = nn.Dense(
-                        1,
-                        kernel_init=nn.initializers.zeros,
-                        bias_init=nn.initializers.constant(self.cross_attn_kv_soft_gate_bias_init),
-                        name=_name("latent_cross_attn_kv_gate_score", 1),
-                    )(kv_gate_input)
-                    kv_gate = jax.nn.sigmoid(kv_gate_score)
-                    memory_logit_bias = jnp.log(kv_gate[..., 0].astype(jnp.float32) + jnp.finfo(jnp.float32).eps)
                 latent_attn = CrossAttention(
                     query_config=self.configs[1],
                     memory_width=self.configs[0].width,
@@ -332,79 +253,34 @@ class Block(nn.Module):
                     normed_action_x,
                     latent_memory,
                     latent_memory_mask,
-                    memory_logit_bias,
+                    None,
                     cross_attn_layer_index,
                     cross_attn_layer_enabled,
                 )
                 latent_attn = latent_attn * cross_attn_gate[:, None, None].astype(latent_attn.dtype)
-                hidden_gate_record_name = None
-                if self.use_cross_attn_residual_gate and self.use_cross_attn_hidden_gate:
-                    if self.use_cross_attn_context_gate:
-                        context_gate_state = None
-                        if "action" in self.cross_attn_context_gate_inputs:
-                            action_summary = jnp.mean(normed_action_x, axis=1)
-                            context_gate_state = nn.Dense(
-                                self.configs[1].width,
-                                name=_name("latent_cross_attn_context_gate_action_proj", 1),
-                            )(action_summary)
-                        if "attn" in self.cross_attn_context_gate_inputs:
-                            attn_summary = jnp.mean(latent_attn, axis=1)
-                            attn_gate_state = nn.Dense(
-                                self.configs[1].width,
-                                name=_name("latent_cross_attn_context_gate_attn_proj", 1),
-                            )(attn_summary)
-                            context_gate_state = (
-                                attn_gate_state if context_gate_state is None else context_gate_state + attn_gate_state
-                            )
-                        if "prefix" in self.cross_attn_context_gate_inputs:
-                            if prefix_context_state is None:
-                                prefix_context_state = jnp.zeros(
-                                    (normed_action_x.shape[0], self.configs[0].width),
-                                    dtype=normed_action_x.dtype,
-                                )
-                            prefix_gate_state = nn.Dense(
-                                self.configs[1].width,
-                                name=_name("latent_cross_attn_context_gate_prefix_proj", 1),
-                            )(prefix_context_state)
-                            context_gate_state = (
-                                prefix_gate_state
-                                if context_gate_state is None
-                                else context_gate_state + prefix_gate_state
-                            )
-                        if context_gate_state is None:
-                            raise ValueError("cross_attn_context_gate_inputs must be non-empty.")
-                        context_gate_state = jnp.tanh(context_gate_state)
-                        context_gate = nn.Dense(
-                            self.configs[1].width,
-                            kernel_init=nn.initializers.zeros,
-                            bias_init=nn.initializers.constant(self.cross_attn_context_gate_bias_init),
-                            name=_name("latent_cross_attn_context_gate_score", 1),
-                        )(context_gate_state)
-                        latent_gate = jax.nn.sigmoid(context_gate)[:, None, :].astype(latent_attn.dtype)
-                        hidden_gate_record_name = _name("latent_cross_attn_context_gate", 1)
-                    else:
-                        hidden_gate = nn.Dense(
-                            self.configs[1].width,
-                            kernel_init=nn.initializers.zeros,
-                            bias_init=nn.initializers.constant(self.cross_attn_hidden_gate_bias_init),
-                            name=_name("latent_cross_attn_hidden_gate", 1),
-                        )(normed_action_x)
-                        latent_gate = jax.nn.sigmoid(hidden_gate).astype(latent_attn.dtype)
-                        hidden_gate_record_name = _name("latent_cross_attn_hidden_gate", 1)
                 latent_attn = drop(latent_attn, deterministic)
-                # cross_attn_layer_scale 是按层来开cross atttn用到
-                latent_attn = latent_attn * cross_attn_layer_scale
-                if self.use_cross_attn_residual_gate:
-                    latent_gate = latent_gate * cross_attn_layer_scale.astype(latent_gate.dtype)
-                    if hidden_gate_record_name is not None:
-                        _maybe_record_hidden_gate(
-                            hidden_gate_record_name,
-                            latent_gate,
-                            latent_attn,
-                            cross_attn_layer_index,
-                            cross_attn_layer_enabled,
-                            xs[1],
-                        )
+                if self.oat_mode == "only_action":
+                    action_summary = jnp.mean(normed_action_x, axis=1)
+                    context_gate_state = nn.Dense(
+                        self.configs[1].width,
+                        name=_name("latent_cross_attn_context_gate_action_proj", 1),
+                    )(action_summary)
+                    context_gate_state = jnp.tanh(context_gate_state)
+                    context_gate = nn.Dense(
+                        self.configs[1].width,
+                        kernel_init=nn.initializers.zeros,
+                        bias_init=nn.initializers.constant(-5.0),
+                        name=_name("latent_cross_attn_context_gate_score", 1),
+                    )(context_gate_state)
+                    latent_gate = jax.nn.sigmoid(context_gate)[:, None, :].astype(latent_attn.dtype)
+                    _maybe_record_hidden_gate(
+                        _name("latent_cross_attn_context_gate", 1),
+                        latent_gate,
+                        latent_attn,
+                        cross_attn_layer_index,
+                        cross_attn_layer_enabled,
+                        xs[1],
+                    )
                     xs[1] = _gated_residual(xs[1], latent_attn, latent_gate)
                 else:
                     xs[1] = xs[1] + latent_attn
@@ -429,13 +305,7 @@ class Block(nn.Module):
         xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, out, gates, strict=True)]
         xs = sharding.activation_sharding_constraint(xs)
 
-        if query_state is None:
-            batch_size = next(x.shape[0] for x in xs if x is not None)
-            query_state = jnp.zeros(
-                (batch_size, 0, self.configs[0].width), dtype=xs[0].dtype if xs[0] is not None else jnp.float32
-            )
-
-        return xs, (kv_cache, query_state)
+        return xs, kv_cache
 
 
 KVCache: TypeAlias = tuple[
@@ -452,16 +322,7 @@ class Module(nn.Module):
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
     adarms: bool = False
-    latent_cross_attention_to_expert: bool = False
-    use_cross_attn_residual_gate: bool = True
-    use_cross_attn_hidden_gate: bool = False
-    cross_attn_hidden_gate_bias_init: float = -5.0
-    use_cross_attn_context_gate: bool = False
-    cross_attn_context_gate_bias_init: float = -5.0
-    cross_attn_context_gate_inputs: tuple[str, ...] = ("action", "attn", "prefix")
-    use_cross_attn_kv_soft_gate: bool = False
-    cross_attn_kv_soft_gate_bias_init: float = 0.0
-    cross_attn_last_n_layers: int | None = None
+    oat_mode: str = "only_action"
     cache_dtype: str | None = None
 
     def setup(self):
@@ -482,39 +343,15 @@ class Module(nn.Module):
             variable_axes={"params": 0},
             split_rngs={"params": True, "dropout": True},
             in_axes=(
-                0,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
-                0,
-                nn.broadcast,
-                nn.broadcast,
-                0,
-                0,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
+                nn.broadcast, nn.broadcast, nn.broadcast, nn.broadcast,
+                0, nn.broadcast, nn.broadcast, 0, 0, nn.broadcast,
             ),
             length=self.configs[0].depth,
         )(
             configs=self.configs,
             dropout=self.dropout,
             dropout_bdims=self.dropout_bdims,
-            latent_cross_attention_to_expert=self.latent_cross_attention_to_expert,
-            use_cross_attn_residual_gate=self.use_cross_attn_residual_gate,
-            use_cross_attn_hidden_gate=self.use_cross_attn_hidden_gate,
-            cross_attn_hidden_gate_bias_init=self.cross_attn_hidden_gate_bias_init,
-            use_cross_attn_context_gate=self.use_cross_attn_context_gate,
-            cross_attn_context_gate_bias_init=self.cross_attn_context_gate_bias_init,
-            cross_attn_context_gate_inputs=self.cross_attn_context_gate_inputs,
-            use_cross_attn_kv_soft_gate=self.use_cross_attn_kv_soft_gate,
-            cross_attn_kv_soft_gate_bias_init=self.cross_attn_kv_soft_gate_bias_init,
+            oat_mode=self.oat_mode,
             cache_dtype=self.cache_dtype,
         )
         self.final_norms = [RMSNorm(name=_name("final_norm", i)) for i in range(len(self.configs))]
@@ -533,26 +370,15 @@ class Module(nn.Module):
         *,
         kv_cache: KVCache | None = None,
         deterministic: bool = True,
-        latent_query_indices: at.Int[at.Array, "b q"] | None = None,
         cross_attn_memory: at.Float[at.Array, "l b q d"] | None = None,
         cross_attn_memory_mask: at.Bool[at.Array, "b q"] | None = None,
         cross_attn_gate: at.Bool[at.Array, "b"] | None = None,
-        prefix_context_mask: at.Bool[at.Array, "b p"] | None = None,
-        cross_attn_prefix_context: at.Float[at.Array, "b d"] | None = None,
-        query_memory_norm_scale: at.Float[at.Array, "d"] | None = None,
-        query_memory_norm_bias: at.Float[at.Array, "d"] | None = None,
-        query_memory_norm_epsilon: float = 1e-6,
-        query_memory_proj_kernel: at.Float[at.Array, "d d"] | None = None,
-        query_memory_proj_bias: at.Float[at.Array, "d"] | None = None,
-        return_query_states: bool = False,
     ):
         embedded = jax.tree.map(lambda e: e.astype(self.embed_dtype), embedded)
         mask = jnp.asarray(mask)[:, None, :, :]
         if adarms_cond is None:
             adarms_cond = [None] * len(self.configs)
         batch_size = positions.shape[0]
-        if latent_query_indices is None:
-            latent_query_indices = jnp.zeros((batch_size, 0), dtype=jnp.int32)
         if cross_attn_memory is None:
             cross_attn_memory = jnp.zeros(
                 (self.configs[0].depth, batch_size, 0, self.configs[0].width),
@@ -562,70 +388,41 @@ class Module(nn.Module):
             cross_attn_memory_mask = jnp.zeros((batch_size, 0), dtype=bool)
         if cross_attn_gate is None:
             cross_attn_gate = jnp.ones((batch_size,), dtype=bool)
-        if prefix_context_mask is None:
-            prefix_context_mask = jnp.zeros((batch_size, 0), dtype=bool)
-        if cross_attn_prefix_context is None:
-            cross_attn_prefix_context = jnp.zeros(
-                (batch_size, self.configs[0].width),
-                dtype=jnp.dtype(self.embed_dtype),
-            )
         cross_attn_layer_index = jnp.arange(self.configs[0].depth, dtype=jnp.int32)
-        if self.cross_attn_last_n_layers is None:
-            cross_attn_layer_enabled = jnp.ones((self.configs[0].depth,), dtype=bool)
-        else:
-            first_enabled_layer = self.configs[0].depth - self.cross_attn_last_n_layers
-            cross_attn_layer_enabled = cross_attn_layer_index >= first_enabled_layer
+        cross_attn_layer_enabled = jnp.ones((self.configs[0].depth,), dtype=bool)
 
-        embedded, (kv_cache, query_states) = self.layers(
+        embedded, kv_cache = self.layers(
             embedded,
             kv_cache,
             positions,
             mask,
             adarms_cond,
-            latent_query_indices,
             cross_attn_memory.astype(self.embed_dtype),
             cross_attn_memory_mask,
             cross_attn_gate,
             cross_attn_layer_index,
             cross_attn_layer_enabled,
-            prefix_context_mask,
-            cross_attn_prefix_context.astype(self.embed_dtype),
-            query_memory_norm_scale,
-            query_memory_norm_bias,
-            query_memory_norm_epsilon,
-            query_memory_proj_kernel,
-            query_memory_proj_bias,
             deterministic,
         )
 
         out = [
             f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
         ]
-        if return_query_states:
-            return out, kv_cache, query_states
         return out, kv_cache
 
     def init(self, use_adarms: Sequence[bool]):
         self.embed(jnp.zeros((1, 1), dtype=jnp.int32))
-        latent_query_indices = (
-            jnp.zeros((1, 1), dtype=jnp.int32)
-            if self.latent_cross_attention_to_expert and len(self.configs) > 1
-            else None
-        )
         self(
             [jnp.zeros((1, 1, c.width)) for c in self.configs],
             jnp.zeros((1, len(self.configs)), dtype=jnp.int32),
             jnp.zeros((1, len(self.configs), len(self.configs)), dtype=bool),
             adarms_cond=[jnp.zeros((1, c.width)) if u else None for u, c in zip(use_adarms, self.configs, strict=True)],
-            latent_query_indices=latent_query_indices,
+            cross_attn_memory=(
+                jnp.zeros((self.configs[0].depth, 1, 1, self.configs[0].width))
+                if self.oat_mode != "noexpert" else None
+            ),
+            cross_attn_memory_mask=(jnp.ones((1, 1), dtype=bool) if self.oat_mode != "noexpert" else None),
         )
-
-
-def _masked_mean(x: at.Float[at.Array, "b s d"], mask: at.Bool[at.Array, "b s"]) -> at.Float[at.Array, "b d"]:
-    mask = jnp.asarray(mask, dtype=bool)
-    weights = mask[..., None].astype(x.dtype)
-    denom = jnp.maximum(jnp.sum(weights, axis=1), 1.0)
-    return jnp.sum(x * weights, axis=1) / denom
 
 
 def _apply_rope(x, *, positions, max_wavelength=10_000):
@@ -819,26 +616,3 @@ def _update_cache(k, v, idx, k_cache, v_cache, cache_dtype=None):
     v_new = jax.lax.dynamic_update_slice(v_cache, v.astype(cache_dtype), indices)
     idx_new = idx + 1
     return idx_new, k_new, v_new
-
-
-def _apply_query_memory_adapter(
-    query_state,
-    norm_scale,
-    norm_bias,
-    norm_epsilon,
-    proj_kernel,
-    proj_bias,
-):
-    x = jnp.asarray(query_state, dtype=jnp.float32)
-    mean = jnp.mean(x, axis=-1, keepdims=True)
-    centered = x - mean
-    var = jnp.mean(jnp.square(centered), axis=-1, keepdims=True)
-    x = centered * jax.lax.rsqrt(var + norm_epsilon)
-    if norm_scale is not None:
-        x = x * jnp.asarray(norm_scale, dtype=x.dtype)
-    if norm_bias is not None:
-        x = x + jnp.asarray(norm_bias, dtype=x.dtype)
-    x = jnp.einsum("bqd,df->bqf", x, jnp.asarray(proj_kernel, dtype=x.dtype), preferred_element_type=jnp.float32)
-    if proj_bias is not None:
-        x = x + jnp.asarray(proj_bias, dtype=x.dtype)
-    return x.astype(query_state.dtype)
